@@ -78,6 +78,12 @@
     }
   ],
   "openapi": "openapi.json",
+  "api": {
+    "baseUrl": "https://api.allow402.com",
+    "auth": {
+      "method": "bearer"
+    }
+  },
   "footerSocials": {
     "x": "https://x.com/allow402"
   }
