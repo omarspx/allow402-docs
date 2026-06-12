@@ -32,11 +32,6 @@
   ],
   "anchors": [
     {
-      "name": "GitHub",
-      "icon": "github",
-      "url": "https://github.com/omarspx/allow402"
-    },
-    {
       "name": "x402 Protocol",
       "icon": "link",
       "url": "https://x402.org"
