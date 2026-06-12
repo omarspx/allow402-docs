@@ -1,0 +1,174 @@
+---
+title: "TypeScript SDK"
+description: "Official TypeScript/Node.js client for allow402."
+---
+
+## Installation
+
+```bash
+npm install @allow402/sdk
+```
+
+## Initialize
+
+```typescript
+import { Allow402Client } from '@allow402/sdk'
+
+const client = new Allow402Client({
+  apiKey: process.env.ALLOW402_API_KEY, // x402_yourkeyhere
+  // baseUrl: 'https://api.allow402.com', // optional override
+})
+```
+
+## proxy()
+
+Forward a call to any x402 API. Returns structured response with payment metadata.
+
+```typescript
+const result = await client.proxy('https://api.example.com/data', {
+  method: 'GET',        // optional, default GET
+  cacheMaxAge: 60,      // optional, cache TTL in seconds
+})
+
+console.log(result.data)           // parsed upstream body
+console.log(result.creditsUsed)    // credits charged
+console.log(result.creditsRemaining)
+console.log(result.fromCache)      // true / false
+console.log(result.payment)        // { required: false } or full payment meta
+```
+
+### POST request
+
+```typescript
+const result = await client.proxy('https://api.example.com/completions', {
+  method: 'POST',
+  body: {
+    model: 'gpt-4o',
+    messages: [{ role: 'user', content: 'Hello!' }],
+  },
+})
+```
+
+## fetch()
+
+Drop-in replacement for the native `fetch` API. Payment is handled invisibly.
+
+```typescript
+const res = await client.fetch('https://api.example.com/data')
+const data = await res.json()
+
+// Credit info in response headers
+console.log(res.headers.get('x-allow402-credits-used'))   // "1050"
+console.log(res.headers.get('x-allow402-balance'))        // "9870950"
+```
+
+## quote()
+
+Get the price of a call without making it or spending credits.
+
+```typescript
+const quote = await client.quote('https://api.example.com/data')
+
+console.log(quote.cost)            // 1050 credits
+console.log(quote.costUsd)         // "$0.00000105"
+console.log(quote.cacheAvailable)  // true if a cache hit is available
+console.log(quote.network)         // "eip155:8453"
+```
+
+## getBalance()
+
+```typescript
+const balance = await client.getBalance()
+console.log(balance.available) // 9872000 credits
+```
+
+## getKeyUsage()
+
+```typescript
+const usage = await client.getKeyUsage('key_abc123')
+
+console.log(usage.utilizationPct)   // 2.41
+console.log(usage.callCount)        // 847
+console.log(usage.creditsRemaining) // 487950
+```
+
+## Error handling
+
+```typescript
+import { Allow402Error } from '@allow402/sdk'
+
+try {
+  const result = await client.proxy('https://api.example.com/data')
+} catch (err) {
+  if (err instanceof Allow402Error) {
+    switch (err.code) {
+      case 'INSUFFICIENT_CREDITS':
+        console.error('Top up your balance')
+        break
+      case 'KEY_BUDGET_EXHAUSTED':
+        console.error('This key has no remaining budget')
+        break
+      case 'CALL_COST_LIMIT_EXCEEDED':
+        console.error('Call is too expensive for this key')
+        break
+      case 'UPSTREAM_TIMEOUT':
+        console.error('Target API timed out')
+        break
+    }
+  }
+}
+```
+
+## Budget events
+
+```typescript
+const client = new Allow402Client({
+  apiKey: process.env.ALLOW402_API_KEY,
+  budgetWarningPct: 20, // warn at 20% remaining (default)
+})
+
+client.on('budget:warning', ({ remaining, pct }) => {
+  console.warn(`Budget at ${pct}% — ${remaining} credits left`)
+})
+
+client.on('budget:exhausted', () => {
+  console.error('Key budget exhausted')
+})
+```
+
+## AI agent integration
+
+```typescript
+import { Allow402Tool } from '@allow402/sdk/langchain'
+import { createOpenAIFunctionsAgent } from 'langchain/agents'
+
+const tool = new Allow402Tool({
+  apiKey: process.env.ALLOW402_API_KEY,
+  name: 'http_call',
+  description: 'Make an HTTP call to any x402-compatible API',
+})
+
+const agent = createOpenAIFunctionsAgent({ tools: [tool], llm, prompt })
+```
+
+For the Vercel AI SDK, pass `client.fetch.bind(client)` directly:
+
+```typescript
+import { generateText, tool } from 'ai'
+import { z } from 'zod'
+
+const result = await generateText({
+  model: openai('gpt-4o'),
+  tools: {
+    fetchData: tool({
+      description: 'Fetch data from a paid API',
+      parameters: z.object({ url: z.string() }),
+      execute: async ({ url }) => {
+        const res = await client.fetch(url)
+        return res.json()
+      },
+    }),
+  },
+  prompt: 'Get the current BTC price',
+})
+```

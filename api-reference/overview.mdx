@@ -1,0 +1,57 @@
+---
+title: "Overview"
+description: "Base URL, authentication, and error format."
+---
+
+## Base URL
+
+```
+https://api.allow402.com
+```
+
+## Authentication
+
+Two auth schemes are used depending on the endpoint:
+
+### API key (Bearer token)
+
+For proxy and key usage endpoints. Pass your `x402_` key as a Bearer token:
+
+```http
+Authorization: Bearer x402_yourkeyhere
+```
+
+### Dashboard auth
+
+Dashboard management endpoints (`/v1/dashboard/*`) are secured via internal headers and accessed through the [allow402 Dashboard](https://allow402.com/dashboard). They are not designed for direct API calls.
+
+## Error format
+
+All errors follow the same envelope:
+
+```json
+{
+  "code": "INVALID_REQUEST",
+  "message": "Human-readable description",
+  "requestId": "req_a1b2c3d4"
+}
+```
+
+## Error codes
+
+| HTTP | Code | Description |
+|------|------|-------------|
+| 400 | `INVALID_REQUEST` | Missing or malformed request body |
+| 400 | `INVALID_URL` | URL targets a private/reserved address |
+| 401 | `UNAUTHORIZED` | Missing or invalid API key |
+| 402 | `INSUFFICIENT_CREDITS` | Not enough credits in your account |
+| 402 | `KEY_BUDGET_EXHAUSTED` | This API key's credit budget is fully spent |
+| 402 | `CALL_COST_LIMIT_EXCEEDED` | Service cost exceeds key's `maxCostPerCall` |
+| 404 | `NOT_FOUND` | Resource not found |
+| 429 | `RATE_LIMIT` | Too many requests |
+| 502 | `UPSTREAM_ERROR` | Target service returned a non-2xx response |
+| 504 | `UPSTREAM_TIMEOUT` | Target did not respond within 20 seconds |
+
+## Rate limits
+
+100 requests per minute per API key. Exceeding this returns `429 RATE_LIMIT`.

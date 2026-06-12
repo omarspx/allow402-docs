@@ -1,0 +1,93 @@
+---
+title: "Python SDK"
+description: "Official Python client for allow402."
+---
+
+<Note>
+  The Python SDK is in development. The REST API is fully available today — use it directly with `requests` or `httpx` while the SDK ships.
+</Note>
+
+## Installation
+
+```bash
+pip install allow402
+```
+
+## Initialize
+
+```python
+from allow402 import Allow402Client
+import os
+
+client = Allow402Client(
+    api_key=os.environ["ALLOW402_API_KEY"],
+)
+```
+
+## proxy()
+
+```python
+result = client.proxy("https://api.example.com/data", cache_max_age=60)
+
+print(result.data)            # upstream response body
+print(result.credits_used)    # credits charged
+print(result.from_cache)      # True / False
+```
+
+## POST request
+
+```python
+result = client.proxy(
+    "https://api.example.com/completions",
+    method="POST",
+    body={"model": "gpt-4o", "messages": [{"role": "user", "content": "Hello!"}]},
+)
+```
+
+## Context manager
+
+```python
+with Allow402Client(api_key="x402_...") as client:
+    result = client.proxy("https://api.example.com/data")
+    print(result.data)
+```
+
+## Async (httpx)
+
+```python
+import asyncio
+from allow402 import AsyncAllow402Client
+
+async def main():
+    async with AsyncAllow402Client(api_key="x402_...") as client:
+        result = await client.proxy("https://api.example.com/data")
+        print(result.data)
+
+asyncio.run(main())
+```
+
+## Using the REST API directly
+
+Until the SDK ships, call allow402 directly with `requests`:
+
+```python
+import requests
+import os
+
+resp = requests.post(
+    "https://api.allow402.com/v1/proxy",
+    headers={
+        "Authorization": f"Bearer {os.environ['ALLOW402_API_KEY']}",
+        "Content-Type": "application/json",
+    },
+    json={
+        "url": "https://api.example.com/data",
+        "method": "GET",
+        "cacheMaxAge": 60,
+    },
+)
+
+data = resp.json()
+print(data["data"])
+print(data["creditsUsed"])
+```

@@ -1,0 +1,547 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "allow402 API",
+    "description": "Payment proxy for x402 and crypto-gated APIs. Handles EIP-3009 USDC micropayments on Base L2 automatically — your code only sees the 200.",
+    "version": "1.0.0",
+    "contact": { "url": "https://allow402.com" }
+  },
+  "servers": [
+    { "url": "https://api.allow402.com", "description": "Production" },
+    { "url": "http://localhost:4000", "description": "Local dev" }
+  ],
+  "components": {
+    "securitySchemes": {
+      "ApiKey": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Your allow402 API key. Format: `Bearer x402_yourkeyhere`. Get one from the [Dashboard](https://allow402.com/dashboard)."
+      },
+      "DashboardAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-dashboard-secret",
+        "description": "Internal dashboard auth — used by the allow402 Dashboard UI, not intended for direct API calls."
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": ["code", "message"],
+        "properties": {
+          "code": { "type": "string", "example": "INVALID_REQUEST" },
+          "message": { "type": "string", "example": "Invalid request body" },
+          "requestId": { "type": "string", "example": "req_a1b2c3d4" }
+        }
+      },
+      "ApiKey": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "example": "key_abc123" },
+          "name": { "type": "string", "example": "Agent prod" },
+          "prefix": { "type": "string", "example": "x402_abc", "description": "First 12 characters of the key — safe for display." },
+          "allocatedCredits": { "type": "integer", "nullable": true, "example": 500000, "description": "Hard credit cap. `null` = unlimited." },
+          "creditsSpent": { "type": "integer", "example": 12050 },
+          "maxCostPerCall": { "type": "integer", "nullable": true, "example": 2000, "description": "Per-call cost ceiling in credits." },
+          "createdAt": { "type": "string", "format": "date-time", "example": "2026-01-15T10:00:00.000Z" },
+          "lastUsedAt": { "type": "string", "format": "date-time", "nullable": true, "example": "2026-06-10T14:23:11.000Z" },
+          "expiresAt": { "type": "string", "format": "date-time", "nullable": true }
+        }
+      },
+      "PaymentMeta": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "No x402 payment was required for this call.",
+            "properties": {
+              "required": { "type": "boolean", "enum": [false] }
+            },
+            "required": ["required"]
+          },
+          {
+            "type": "object",
+            "description": "x402 payment was made on your behalf.",
+            "properties": {
+              "required": { "type": "boolean", "enum": [true] },
+              "amount": { "type": "string", "description": "Payment amount in atomic units (micro-USDC).", "example": "1000" },
+              "amountCredits": { "type": "integer", "example": 1000 },
+              "amountUsd": { "type": "string", "example": "$0.000001" },
+              "asset": { "type": "string", "description": "USDC contract address on Base.", "example": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" },
+              "network": { "type": "string", "example": "eip155:8453" },
+              "networkName": { "type": "string", "example": "Base" },
+              "payTo": { "type": "string", "description": "Service recipient wallet address." },
+              "scheme": { "type": "string", "example": "erc3009" }
+            },
+            "required": ["required", "amount", "amountCredits", "amountUsd", "asset", "network", "networkName", "payTo", "scheme"]
+          }
+        ]
+      }
+    }
+  },
+  "tags": [
+    { "name": "Proxy", "description": "Forward calls to x402-compatible APIs with automatic payment handling." },
+    { "name": "API Keys", "description": "Create and manage API keys with credit budgets." },
+    { "name": "Balance", "description": "Credit balance." }
+  ],
+  "paths": {
+    "/v1/proxy": {
+      "post": {
+        "operationId": "proxy",
+        "summary": "Proxy a call",
+        "description": "Forward a request to any x402-compatible API. If the target returns `402 Payment Required`, allow402 signs an EIP-3009 USDC authorization from the platform wallet and retries transparently — your code only ever sees the final `200 OK`.\n\nCredits are debited from your balance after a successful call. On cache hits (`X-Cache: HIT`), no payment is triggered.",
+        "tags": ["Proxy"],
+        "security": [{ "ApiKey": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["url"],
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "format": "uri",
+                    "description": "Target API URL. Must be `http://` or `https://`. Private/internal addresses (localhost, 10.x.x.x, 169.254.x.x, etc.) are blocked.",
+                    "example": "https://api.example.com/data"
+                  },
+                  "method": {
+                    "type": "string",
+                    "enum": ["GET", "POST", "PUT", "DELETE", "PATCH"],
+                    "default": "GET",
+                    "description": "HTTP method."
+                  },
+                  "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" },
+                    "description": "Extra headers to forward to the target service."
+                  },
+                  "body": {
+                    "description": "Request body for POST/PUT. Forwarded as JSON.",
+                    "example": { "model": "gpt-4o", "messages": [{ "role": "user", "content": "Hello" }] }
+                  },
+                  "cacheMaxAge": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 86400,
+                    "description": "Cache TTL in seconds. `0` = always fresh. On a cache hit, the response is served from Redis with no payment. Header `X-Cache: HIT` or `MISS` indicates the cache state.\n\nDiscounted pricing applies when `cacheMaxAge > 0`: the longer you tolerate stale data, the less you pay on a cache miss.",
+                    "example": 60
+                  }
+                }
+              },
+              "examples": {
+                "basic": {
+                  "summary": "Simple GET",
+                  "value": { "url": "https://api.example.com/prices/BTC", "method": "GET" }
+                },
+                "cached": {
+                  "summary": "With 60s cache",
+                  "value": { "url": "https://api.example.com/prices/BTC", "method": "GET", "cacheMaxAge": 60 }
+                },
+                "post": {
+                  "summary": "POST with body",
+                  "value": {
+                    "url": "https://api.example.com/completions",
+                    "method": "POST",
+                    "body": { "model": "gpt-4o", "messages": [{ "role": "user", "content": "Hello" }] }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Upstream response proxied successfully.",
+            "headers": {
+              "X-Cache": {
+                "schema": { "type": "string", "enum": ["HIT", "MISS"] },
+                "description": "Whether the response was served from the Redis cache."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean", "example": true },
+                    "status": { "type": "integer", "description": "HTTP status returned by the upstream service.", "example": 200 },
+                    "data": { "description": "Parsed upstream response body (JSON or string)." },
+                    "creditsUsed": { "type": "integer", "description": "Credits deducted for this call (including x402 payment and 5% platform fee).", "example": 1050 },
+                    "creditsRemaining": { "type": "integer", "description": "Credits remaining in your account after this call.", "example": 9870950 },
+                    "requestId": { "type": "string", "example": "req_a1b2c3d4" },
+                    "latencyMs": { "type": "integer", "example": 213 },
+                    "payment": { "$ref": "#/components/schemas/PaymentMeta" }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "status": 200,
+                  "data": { "price": 67342.10, "currency": "USD" },
+                  "creditsUsed": 1050,
+                  "creditsRemaining": 9870950,
+                  "requestId": "req_a1b2c3d4",
+                  "latencyMs": 213,
+                  "payment": { "required": false }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body or blocked URL (SSRF guard).",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "402": {
+            "description": "Insufficient credits, key budget exhausted, or per-call cost ceiling exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Error" },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "required": { "type": "integer", "description": "Credits required for this call." },
+                        "limit": { "type": "integer", "description": "maxCostPerCall limit on this key." }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Upstream service returned a non-2xx response.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "504": {
+            "description": "Upstream service timed out (20 s limit).",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+    "/v1/quote": {
+      "get": {
+        "operationId": "quote",
+        "summary": "Get price quote",
+        "description": "Returns the expected credit cost for proxying a call to a given URL — **without making the actual call or debiting any credits**. Probes the target with a lightweight HEAD/GET to detect x402 pricing headers. Useful for showing users cost estimates before calling.",
+        "tags": ["Proxy"],
+        "security": [{ "ApiKey": [] }],
+        "parameters": [
+          {
+            "name": "url",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string", "format": "uri" },
+            "description": "Target API URL to price.",
+            "example": "https://api.example.com/data"
+          },
+          {
+            "name": "method",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string", "enum": ["GET", "POST", "PUT", "DELETE", "PATCH"], "default": "GET" },
+            "description": "HTTP method."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pricing information for the target URL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "url": { "type": "string" },
+                    "method": { "type": "string" },
+                    "cost": { "type": "integer", "description": "Credits that would be charged if you called this endpoint now (accounting for cache).", "example": 1 },
+                    "costUsd": { "type": "string", "example": "$0.000001" },
+                    "cacheAvailable": { "type": "boolean", "description": "Whether a valid cached response already exists (cost = 1 credit).", "example": true },
+                    "fullCost": { "type": "integer", "description": "Full upstream cost if cache is not used.", "example": 1050 },
+                    "fullCostUsd": { "type": "string", "example": "$0.00000105" },
+                    "network": { "type": "string", "nullable": true, "example": "eip155:8453" },
+                    "networkName": { "type": "string", "nullable": true, "example": "Base" },
+                    "asset": { "type": "string", "nullable": true },
+                    "payTo": { "type": "string", "nullable": true },
+                    "latencyMs": { "type": "integer", "example": 142 }
+                  }
+                },
+                "example": {
+                  "url": "https://api.example.com/prices/BTC",
+                  "method": "GET",
+                  "cost": 1050,
+                  "costUsd": "$0.00000105",
+                  "cacheAvailable": false,
+                  "fullCost": 1050,
+                  "fullCostUsd": "$0.00000105",
+                  "network": "eip155:8453",
+                  "networkName": "Base",
+                  "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+                  "payTo": "0xabc...",
+                  "latencyMs": 142
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or blocked URL.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "502": {
+            "description": "Could not reach target URL.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+    "/v1/keys/{id}/usage": {
+      "get": {
+        "operationId": "getKeyUsage",
+        "summary": "Get key usage",
+        "description": "Returns credit spend, utilization percentage, and call count for a specific API key. Authenticate with the key itself (not dashboard auth).",
+        "tags": ["API Keys"],
+        "security": [{ "ApiKey": [] }],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "API key ID.",
+            "example": "key_abc123"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Key usage statistics.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "keyId": { "type": "string", "example": "key_abc123" },
+                    "name": { "type": "string", "example": "Agent prod" },
+                    "prefix": { "type": "string", "example": "x402_abc" },
+                    "creditsSpent": { "type": "integer", "example": 12050 },
+                    "creditsAllocated": { "type": "integer", "nullable": true, "example": 500000 },
+                    "creditsRemaining": { "type": "integer", "nullable": true, "example": 487950, "description": "`null` when the key has no budget cap." },
+                    "utilizationPct": { "type": "number", "nullable": true, "example": 2.41, "description": "Percentage of the budget spent (0–100). `null` when unlimited." },
+                    "callCount": { "type": "integer", "example": 847 },
+                    "lastUsedAt": { "type": "string", "format": "date-time", "nullable": true }
+                  }
+                },
+                "example": {
+                  "keyId": "key_abc123",
+                  "name": "Agent prod",
+                  "prefix": "x402_abc",
+                  "creditsSpent": 12050,
+                  "creditsAllocated": 500000,
+                  "creditsRemaining": 487950,
+                  "utilizationPct": 2.41,
+                  "callCount": 847,
+                  "lastUsedAt": "2026-06-10T14:23:11.000Z"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "404": {
+            "description": "Key not found or you don't own it.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+    "/v1/dashboard/credits/balance": {
+      "get": {
+        "operationId": "getBalance",
+        "summary": "Get balance",
+        "description": "Current credit balance for your account. 1,000,000 credits = $1.00 USD.",
+        "tags": ["Balance"],
+        "security": [{ "DashboardAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Current balance.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "available": { "type": "integer", "description": "Spendable credits.", "example": 9872000 },
+                    "reserved": { "type": "integer", "description": "Credits reserved for in-flight calls.", "example": 0 },
+                    "total": { "type": "integer", "example": 9872000 }
+                  }
+                },
+                "example": { "available": 9872000, "reserved": 0, "total": 9872000 }
+              }
+            }
+          },
+          "401": { "description": "Invalid dashboard auth." }
+        }
+      }
+    },
+    "/v1/dashboard/keys": {
+      "get": {
+        "operationId": "listKeys",
+        "summary": "List API keys",
+        "description": "All active (non-revoked) API keys for your account, including aggregated call stats.",
+        "tags": ["API Keys"],
+        "security": [{ "DashboardAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Array of API keys.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/ApiKey" }
+                },
+                "example": [
+                  {
+                    "id": "key_abc123",
+                    "name": "Agent prod",
+                    "prefix": "x402_abc",
+                    "allocatedCredits": 500000,
+                    "creditsSpent": 12050,
+                    "maxCostPerCall": 2000,
+                    "createdAt": "2026-01-15T10:00:00.000Z",
+                    "lastUsedAt": "2026-06-10T14:23:11.000Z",
+                    "expiresAt": null
+                  }
+                ]
+              }
+            }
+          },
+          "401": { "description": "Invalid dashboard auth." }
+        }
+      },
+      "post": {
+        "operationId": "createKey",
+        "summary": "Create API key",
+        "description": "Create a new API key. The full secret (`x402_...`) is returned **once** — store it immediately. Optionally set a hard credit budget and/or a per-call cost ceiling to control spending.",
+        "tags": ["API Keys"],
+        "security": [{ "DashboardAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "description": "Human-readable name.",
+                    "example": "Agent prod"
+                  },
+                  "allocatedCredits": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Hard credit budget cap. When `creditsSpent` reaches this value, all calls using this key return `402 KEY_BUDGET_EXHAUSTED`. `null` = unlimited.",
+                    "example": 500000
+                  },
+                  "maxCostPerCall": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Per-call cost ceiling in credits. Calls whose x402 price exceeds this are rejected before contacting the upstream service (`402 CALL_COST_LIMIT_EXCEEDED`).",
+                    "example": 2000
+                  },
+                  "expiresAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "ISO 8601 expiry. After this datetime the key returns `401`. `null` = never expires."
+                  }
+                }
+              },
+              "example": {
+                "name": "Agent prod",
+                "allocatedCredits": 500000,
+                "maxCostPerCall": 2000
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Key created. The `secret` field is shown once.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "key": { "$ref": "#/components/schemas/ApiKey" },
+                    "secret": {
+                      "type": "string",
+                      "description": "Full API key value. Shown once — store it immediately.",
+                      "example": "x402_abc123def456ghi789..."
+                    }
+                  }
+                },
+                "example": {
+                  "key": {
+                    "id": "key_abc123",
+                    "name": "Agent prod",
+                    "prefix": "x402_abc",
+                    "allocatedCredits": 500000,
+                    "creditsSpent": 0,
+                    "maxCostPerCall": 2000,
+                    "createdAt": "2026-06-13T10:00:00.000Z",
+                    "lastUsedAt": null,
+                    "expiresAt": null
+                  },
+                  "secret": "x402_abc123def456ghi789..."
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid body.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "401": { "description": "Invalid dashboard auth." }
+        }
+      }
+    },
+    "/v1/dashboard/keys/{id}": {
+      "delete": {
+        "operationId": "revokeKey",
+        "summary": "Revoke API key",
+        "description": "Revoke an API key immediately. Any subsequent request using this key returns `401 UNAUTHORIZED`. The action is irreversible — create a new key if needed.",
+        "tags": ["API Keys"],
+        "security": [{ "DashboardAuth": [] }],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "API key ID.",
+            "example": "key_abc123"
+          }
+        ],
+        "responses": {
+          "204": { "description": "Key revoked. No response body." },
+          "401": { "description": "Invalid dashboard auth." },
+          "404": {
+            "description": "Key not found.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    }
+  }
+}

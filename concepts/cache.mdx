@@ -1,0 +1,67 @@
+---
+title: "Response cache"
+description: "Serve repeated calls from Redis — no payment on cache hits."
+---
+
+## How it works
+
+When `cacheMaxAge > 0`, allow402 stores the upstream response in Redis after the first call. Subsequent calls with the same URL, method, and request body hash are served from cache — **no x402 payment is triggered**, and only 1 credit is charged.
+
+The response header `X-Cache: HIT` or `MISS` tells you whether the cache was used.
+
+## Cache key
+
+The key is derived from:
+```
+SHA-256(method + ":" + url + ":" + JSON.stringify(body))
+```
+
+Two different users calling the same URL with the same params share the same cache entry — only the first caller pays for the upstream response. This makes read-heavy workloads very efficient at scale.
+
+## Enabling cache
+
+Pass `cacheMaxAge` in the proxy request body:
+
+```json
+{
+  "url": "https://api.example.com/prices/BTC",
+  "method": "GET",
+  "cacheMaxAge": 60
+}
+```
+
+Or in the SDK:
+
+```typescript
+const result = await client.proxy('https://api.example.com/prices/BTC', {
+  cacheMaxAge: 60,
+})
+
+console.log(result.fromCache)      // true / false
+console.log(result.creditsUsed)    // 1 on cache hit
+```
+
+## TTL guide
+
+| cacheMaxAge | Use case |
+|-------------|----------|
+| `0` | Real-time data: live orderbooks, tick-level prices — cache disabled |
+| `60` | Fast-moving data: market prices, weather, news feeds |
+| `3600` | Slow data: ENS resolution, token metadata, IPFS CIDs |
+| `86400` | Static data: ABIs, schemas, reference data — essentially free after first call |
+
+## Cache discounts
+
+When you set `cacheMaxAge > 0`, the **cache miss price** (the first call) is also discounted — because you're signaling tolerance for stale data:
+
+| cacheMaxAge | Discount on miss |
+|-------------|-----------------|
+| 1–30 s | 50% off |
+| 31–300 s | 80% off |
+| 300 s+ | 90% off |
+
+This means you pay less on the miss AND 1 credit on every hit.
+
+<Note>
+  Cache entries expire automatically after `cacheMaxAge` seconds. There is no persistent storage of upstream response bodies.
+</Note>

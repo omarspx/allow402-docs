@@ -1,0 +1,77 @@
+---
+title: "Quickstart"
+description: "Make your first proxied call in under 5 minutes."
+---
+
+## 1. Create an account
+
+Sign up at [allow402.com](https://allow402.com) and add credits to your balance (minimum $1 via Stripe).
+
+## 2. Create an API key
+
+In the [Dashboard → API Keys](https://allow402.com/dashboard/api-keys), click **New Key**. Optionally set a credit budget to control spending.
+
+Copy the secret immediately — it's shown once.
+
+## 3. Install the SDK
+
+<CodeGroup>
+```bash npm
+npm install @allow402/sdk
+```
+
+```bash pnpm
+pnpm add @allow402/sdk
+```
+
+```bash yarn
+yarn add @allow402/sdk
+```
+</CodeGroup>
+
+## 4. Make your first call
+
+```typescript
+import { Allow402Client } from '@allow402/sdk'
+
+const client = new Allow402Client({
+  apiKey: process.env.ALLOW402_API_KEY, // x402_yourkeyhere
+})
+
+const result = await client.proxy('https://api.example.com/data')
+
+console.log(result.data)          // upstream response body
+console.log(result.creditsUsed)   // credits charged
+console.log(result.fromCache)     // true if served from cache
+```
+
+## 5. Check the quote first (optional)
+
+Before calling an unknown x402 API, check the price:
+
+```typescript
+const quote = await client.quote('https://api.example.com/data')
+
+console.log(quote.cost)       // credits that would be charged
+console.log(quote.costUsd)    // e.g. "$0.000001050"
+console.log(quote.network)    // "eip155:8453" (Base)
+```
+
+## Or call the REST API directly
+
+```bash
+curl -X POST https://api.allow402.com/v1/proxy \
+  -H "Authorization: Bearer x402_yourkeyhere" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://api.example.com/data", "method": "GET"}'
+```
+
+<Tip>
+  Enable caching for read-heavy endpoints. Cached calls cost 1 credit regardless of the upstream x402 price.
+
+  ```typescript
+  const result = await client.proxy('https://api.example.com/prices/BTC', {
+    cacheMaxAge: 60, // cache for 60 seconds
+  })
+  ```
+</Tip>

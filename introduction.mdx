@@ -1,0 +1,53 @@
+---
+title: "What is allow402?"
+description: "A payment proxy for x402-compatible APIs. Pay per call in USDC on Base — no wallet, no private keys."
+---
+
+## Overview
+
+allow402 is a proxy that sits between your code and any API using the [x402 protocol](https://x402.org). It handles on-chain micropayments automatically so you never have to deal with wallets, private keys, or blockchain transactions.
+
+You call allow402 with a normal HTTP request. If the target API demands payment, allow402 signs an EIP-3009 USDC authorization from its proxy wallet and retries — your code only sees the `200 OK`.
+
+```
+Your App  →  allow402 proxy  →  x402 API
+                     ↕
+                Base L2 (USDC)
+```
+
+## How credits work
+
+Costs are denominated in **credits**. 1 credit = 1 micro-USDC = $0.000001.
+
+| Credits | USD |
+|---------|-----|
+| 1 | $0.000001 |
+| 1,000 | $0.001 |
+| 1,000,000 | $1.00 |
+
+Top up via credit card (Stripe) or by sending USDC directly to your deposit address on Base L2.
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="Automatic x402 payments" icon="bolt">
+    EIP-3009 USDC signing happens in the proxy — your code stays payment-free.
+  </Card>
+  <Card title="Response cache" icon="database">
+    Repeated calls served from Redis. No payment on cache hits. TTL configurable per call.
+  </Card>
+  <Card title="Per-key budgets" icon="shield">
+    Set hard credit caps and per-call cost ceilings on each API key.
+  </Card>
+  <Card title="Price quotes" icon="tag">
+    Get the cost of a call before making it, without debiting credits.
+  </Card>
+</CardGroup>
+
+## What is x402?
+
+x402 is an open HTTP extension that adds native payment to the web. When a client requests a paid resource without payment, the server responds with `402 Payment Required` and an `X-Payment-Requirements` header describing what to pay and where.
+
+The client then signs a payment authorization and retries with a `PAYMENT-SIGNATURE` header. The server verifies the payment on-chain and returns `200 OK`.
+
+allow402 implements this protocol on your behalf using USDC on Base L2 (EIP-3009 `transferWithAuthorization`).

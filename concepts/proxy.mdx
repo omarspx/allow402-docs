@@ -1,0 +1,74 @@
+---
+title: "How the proxy works"
+description: "The x402 payment flow and how allow402 handles it transparently."
+---
+
+## The x402 protocol
+
+x402 adds a payment layer to standard HTTP using a single extra round-trip:
+
+1. Client makes a normal request (no payment headers)
+2. Server returns `402 Payment Required` with an `X-Payment-Requirements` header describing the price and recipient
+3. Client signs a payment authorization and retries with a `PAYMENT-SIGNATURE` header
+4. Server verifies the payment on-chain and returns `200 OK`
+
+allow402 performs steps 2–3 invisibly. Your code sends one request and receives one response.
+
+## Request flow
+
+```
+Your App                allow402               x402 API
+   |                       |                      |
+   |  POST /v1/proxy        |                      |
+   |  {url, method, ...}   |                      |
+   |──────────────────────>|                      |
+   |                       |  GET /resource       |
+   |                       |──────────────────────>|
+   |                       |  402 + X-Payment-Req  |
+   |                       |<─────────────────────|
+   |                       |                      |
+   |                    [Sign EIP-3009 USDC auth] |
+   |                       |                      |
+   |                       |  GET /resource       |
+   |                       |  PAYMENT-SIGNATURE:  |
+   |                       |──────────────────────>|
+   |                       |  200 OK + data        |
+   |                       |<─────────────────────|
+   |  200 + {data, credits}|                      |
+   |<──────────────────────|                      |
+```
+
+## EIP-3009 signing
+
+USDC on Base L2 implements [EIP-3009](https://eips.ethereum.org/EIPS/eip-3009) — `transferWithAuthorization`. This allows gasless, off-chain-signed transfers: instead of broadcasting a transaction, the client produces a signature that authorizes a specific transfer from their wallet.
+
+allow402 holds a proxy wallet that signs these authorizations. Your application never manages private keys.
+
+Key properties:
+- Signature is valid for **one specific transfer** to a specific recipient at a specific amount
+- Replay protection via nonce
+- No gas cost on the client side (facilitator pays gas and is reimbursed)
+
+## Credits and commission
+
+allow402 charges a **5% commission** on each proxied call, minimum 1 credit:
+
+```
+Upstream price:  1,000 credits  ($0.000001 USD)
+Commission:         50 credits  (5%, rounded up, min 1)
+─────────────────────────────────────────────────────
+Total charged:   1,050 credits
+```
+
+For calls to free APIs (no x402 payment), the flat fee is **1 credit**.
+
+## SSRF protection
+
+The proxy validates all target URLs before forwarding. Private/internal addresses are blocked:
+
+- `localhost`, `127.x.x.x`, `0.0.0.0`
+- RFC 1918 ranges: `10.x.x.x`, `172.16–31.x.x`, `192.168.x.x`
+- AWS metadata: `169.254.169.254`
+- Non-http(s) schemes: `file://`, `ftp://`, etc.
+
+DNS resolution is also checked — hostnames that resolve to private IPs are blocked (prevents DNS rebinding attacks).

@@ -1,0 +1,55 @@
+---
+title: "Authentication"
+description: "How to authenticate with the allow402 API."
+---
+
+## API keys
+
+All requests to the allow402 API require an API key passed as a Bearer token:
+
+```http
+Authorization: Bearer x402_yourkeyhere
+```
+
+Keys are prefixed with `x402_`. The prefix shown in the dashboard (e.g. `x402_abc`) is the first 12 characters — safe for identification without exposing the secret.
+
+## Getting a key
+
+1. Sign in at [allow402.com](https://allow402.com)
+2. Go to **Dashboard → API Keys**
+3. Click **New Key**, set an optional budget, copy the secret
+
+<Warning>
+  The full key secret is shown **once** at creation time. Store it in a secrets manager or environment variable immediately.
+</Warning>
+
+## Setting a budget
+
+Keys support two spending controls:
+
+| Field | Description |
+|-------|-------------|
+| `allocatedCredits` | Hard cap on total credits this key can spend. Calls return `402 KEY_BUDGET_EXHAUSTED` once reached. |
+| `maxCostPerCall` | Per-call cost ceiling. Calls whose x402 price exceeds this are rejected before contacting the service. |
+
+Both are optional. Without them, the key is limited only by your account balance.
+
+## Environment variable
+
+Store your key in `.env`:
+
+```bash
+ALLOW402_API_KEY=x402_yourkeyhere
+```
+
+```typescript
+import { Allow402Client } from '@allow402/sdk'
+
+const client = new Allow402Client({
+  apiKey: process.env.ALLOW402_API_KEY,
+})
+```
+
+## Key rotation
+
+Revoke a key from the Dashboard or via the [Revoke key](/api-reference/keys-revoke) endpoint. Revocation is immediate — any in-flight request using the key will fail with `401`.
