@@ -7,6 +7,5 @@
   </defs>
   <rect width="32" height="32" rx="9" fill="url(#allow402-grad)"/>
   <path d="M 20 4 L 10 18 H 15.5 L 12 28 L 22 14 H 16.5 Z" fill="white" opacity="0.93"/>
-  <text x="42" y="22" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="16" font-weight="700" letter-spacing="-0.4" fill="white">allow</text>
-  <text x="87" y="22" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="16" font-weight="700" letter-spacing="-0.4" fill="url(#allow402-grad)">402</text>
+  <text x="42" y="22" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="16" font-weight="700" letter-spacing="-0.4"><tspan fill="white">allow</tspan><tspan fill="#a78bfa">402</tspan></text>
 </svg>
